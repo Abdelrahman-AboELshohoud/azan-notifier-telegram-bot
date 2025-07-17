@@ -1,0 +1,16 @@
+.env
+# Virtual environments
+.venv/
+venv/
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+
+# IDE settings
+.idea/
+.vscode/
+
+# Logs & runtime data
+*.log
+bot_data.pickle
