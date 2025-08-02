@@ -4,8 +4,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-API_URL = "http://api.aladhan.com/v1/timingsByCity"
-
 
 TEXTS = {
     "start": {

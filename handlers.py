@@ -36,9 +36,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(_("settings", lang), callback_data="settings")]
         ])
     )
-    await update.message.reply_text(
-        reply_markup=main_menu_kb(lang)
-    )
+
 
 async def lang_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Language selection command"""
@@ -57,24 +55,6 @@ async def choose_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _("choose_city", lang),
         reply_markup=city_selection_keyboard(lang)
     )
-
-async def city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle city selection from inline keyboard"""
-    query = update.callback_query
-    await query.answer()
-    lang = user_lang(context)
-    await query.edit_message_text(
-        _("choose_city", lang),
-        reply_markup=city_selection_keyboard(lang)
-    )
-
-async def city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle city selection from inline keyboard"""
-    query = update.callback_query
-    await query.answer()
-    city = query.data.removeprefix("city_")
-    await _save_city(update, context, city, "")
-    
 
 async def city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle city selection from inline keyboard"""
@@ -103,10 +83,16 @@ async def _save_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city: s
     times = get_prayer_times(city, country)
     
     if not times:
+        error_msg = _("error_fetch", lang) + f" ({city})"
         if update.callback_query:
-            await update.callback_query.edit_message_text(_("error_fetch", lang))
+            try:
+                await update.callback_query.edit_message_text(error_msg)
+            except Exception as e:
+                # If edit fails, answer the callback and send new message
+                await update.callback_query.answer()
+                await update.callback_query.message.reply_text(error_msg)
         else:
-            await update.message.reply_text(_("error_fetch", lang))
+            await update.message.reply_text(error_msg)
         return
 
     context.user_data["city"] = city
@@ -128,11 +114,20 @@ async def _save_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city: s
     text = _("city_saved", lang, city, f" ({country})" if country else "", format_timings(times, lang))
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            text,
-            parse_mode="Markdown",
-            reply_markup=after_city_selection_keyboard(lang)
-        )
+        try:
+            await update.callback_query.edit_message_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=after_city_selection_keyboard(lang)
+            )
+        except Exception as e:
+            # If edit fails, answer the callback and send new message
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(
+                text,
+                parse_mode="Markdown",
+                reply_markup=after_city_selection_keyboard(lang)
+            )
     else:
         await update.message.reply_text(
             text,
@@ -140,10 +135,7 @@ async def _save_city(update: Update, context: ContextTypes.DEFAULT_TYPE, city: s
             reply_markup=after_city_selection_keyboard(lang)
         )
     
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        reply_markup=main_menu_kb(lang)
-    )
+    # Message already sent above with prayer times
 
 async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show today's prayer times"""
@@ -156,14 +148,41 @@ async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     times = get_prayer_times(city, context.user_data.get("country", ""))
     if not times:
-        await update.message.reply_text(_("error_fetch", lang))
+        error_msg = _("error_fetch", lang)
+        if update.callback_query:
+            await update.callback_query.edit_message_text(error_msg)
+        else:
+            await update.message.reply_text(error_msg)
         return
     
-    await update.message.reply_text(
-        format_timings(times, lang),
-        parse_mode="Markdown",
-        reply_markup=after_city_selection_keyboard(lang)
-    )
+    # Include city name in the message like _save_city does
+    country_text = f" ({context.user_data.get('country', '')})" if context.user_data.get('country') else ""
+    message_text = _("city_saved", lang, city, country_text, format_timings(times, lang))
+    keyboard = after_city_selection_keyboard(lang)
+    
+    if update.callback_query:
+        # Called from refresh button - edit the existing message
+        try:
+            await update.callback_query.edit_message_text(
+                message_text,
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            # If edit fails, answer the callback and send new message
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(
+                message_text,
+                parse_mode="Markdown",
+                reply_markup=keyboard
+            )
+    else:
+        # Called from /today command - send new message
+        await update.message.reply_text(
+            message_text,
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
 
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show settings menu"""
@@ -252,6 +271,42 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle errors that occur during update processing"""
+    import traceback
+    
+    # Log detailed error information
+    logger.error(f"❌ EXCEPTION CAUGHT: {context.error}")
+    logger.error(f"❌ EXCEPTION TYPE: {type(context.error)}")
+    logger.error(f"❌ TRACEBACK: {traceback.format_exc()}")
+    
+    if update:
+        logger.error(f"❌ UPDATE INFO: {update}")
+        if update.message:
+            logger.error(f"❌ MESSAGE: {update.message.text}")
+        if update.callback_query:
+            logger.error(f"❌ CALLBACK: {update.callback_query.data}")
+    
+    # Try to inform the user about the error
+    try:
+        if update and update.effective_chat:
+            lang = user_lang(context) if context.user_data else "ar"
+            error_msg = _("error_fetch", lang) if "error_fetch" in TEXTS else "❌ حدث خطأ / An error occurred"
+            
+            if update.callback_query:
+                try:
+                    await update.callback_query.answer()
+                    await update.callback_query.message.reply_text(error_msg)
+                except:
+                    pass
+            elif update.message:
+                try:
+                    await update.message.reply_text(error_msg)
+                except:
+                    pass
+    except Exception as e:
+        logger.error(f"Error in error handler: {e}")
+
 def setup_handlers(application):
     """Set up all handlers for the bot"""
     
@@ -283,3 +338,6 @@ def setup_handlers(application):
     application.add_handler(CallbackQueryHandler(settings, pattern="settings"))
     
     application.add_handler(conv_handler)
+    
+    # Add error handler
+    application.add_error_handler(error_handler)

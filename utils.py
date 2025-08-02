@@ -1,7 +1,9 @@
 import datetime
 import pytz
 import requests
-from config import API_URL, TEXTS
+import json
+import logging
+from config import TEXTS
 
 def _(key: str, lang: str = "ar", *args, **kwargs) -> str:
     """Get localized text"""
@@ -39,12 +41,68 @@ def format_timings(times: dict, lang: str) -> str:
         f"🌙 **العشاء**: {times['Isha']}"
     )
 
-def get_prayer_times(city: str, country: str = "") -> dict | None:
-    """Fetch prayer times from API"""
+def get_prayer_times(city, country=None):
+    """Get prayer times for a city using the working HTTPS API"""
+    
+    # Use HTTPS API with both city and country
+    url = "https://api.aladhan.com/v1/timingsByCity"
+    
+    # Default country if not provided
+    if not country:
+        # Try to guess country based on common cities
+        city_lower = city.lower()
+        if city_lower in ['medina', 'madinah', 'makkah', 'mecca', 'riyadh', 'jeddah']:
+            country = "Saudi Arabia"
+        elif city_lower in ['cairo', 'alexandria']:
+            country = "Egypt"
+        elif city_lower in ['istanbul', 'ankara']:
+            country = "Turkey"
+        elif city_lower in ['dubai', 'abu dhabi']:
+            country = "UAE"
+        elif city_lower in ['doha']:
+            country = "Qatar"
+        elif city_lower in ['kuwait']:
+            country = "Kuwait"
+        else:
+            country = "Saudi Arabia"  # Default fallback
+    
+    params = {
+        "city": city,
+        "country": country,
+        "method": 5  # University of Islamic Sciences, Karachi
+    }
+    
     try:
-        r = requests.get(API_URL, params={"city": city, "country": country, "method": 5}, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-        return data["data"]["timings"] if data.get("code") == 200 else None
-    except Exception:
-        return None
+        logging.info(f"Fetching prayer times for {city}, {country}")
+        response = requests.get(url, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            if data.get("code") == 200 and "data" in data and "timings" in data["data"]:
+                timings = data["data"]["timings"]
+                
+                # Extract the 5 main prayer times
+                prayer_times = {
+                    "Fajr": timings.get("Fajr", "05:00"),
+                    "Dhuhr": timings.get("Dhuhr", "12:00"),
+                    "Asr": timings.get("Asr", "15:30"),
+                    "Maghrib": timings.get("Maghrib", "18:00"),
+                    "Isha": timings.get("Isha", "19:30")
+                }
+                
+                logging.info(f"✅ Successfully fetched prayer times for {city}, {country}")
+                return prayer_times
+            else:
+                logging.error(f"API returned error: {data}")
+        else:
+            logging.error(f"HTTP error {response.status_code}: {response.text}")
+            
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Network error fetching prayer times: {e}")
+    except Exception as e:
+        logging.error(f"Unexpected error fetching prayer times: {e}")
+    
+    # If all fails, return None (no fake data)
+    logging.error(f"❌ Failed to fetch real prayer times for {city}, {country}")
+    return None
